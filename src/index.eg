@@ -90,47 +90,91 @@ class TestMask:
    constructor{@suite, @mask, @count = 0} =
       pass
 
-   gen! generateTests{var path = {}} =
+   async! getTests{var path = {}} =
       match @suite:
          when @mask === false ->
             pass
          Test? t ->
-            yield #test{path, t}
+            {#test{path, t}}
          TestSuite? s ->
             if Number? path[path.length - 1]:
                path[path.length - 1] = s.descr
             else:
                path ++= {s.descr}
             var pos = 0
+            var results = {}
             try:
-               for test of s.generateTests{}:
-                  match if{@mask === true, @mask, @mask[pos]}:
-                     undefined? ->
-                        break
-                     false? ->
-                        pass
-                     submask ->
-                        m = TestMask{test, submask}
-                        yield all m.generateTests{newpath} where newpath =
-                           if{s.subdescr.length == 1, path, path ++ {pos}}
-                  pos += 1
+               iter = s.generateTests{}
+               var curr = iter.next{}
+               while not curr.done:
+                  match curr.value:
+                     Test? test or TestSuite? test ->
+                        match if{@mask === true, @mask, @mask[pos]}:
+                           undefined? ->
+                              break
+                           false? ->
+                              pass
+                           submask ->
+                              m = TestMask{test, submask}
+                              newpath = if{s.subdescr.length == 1, path, path ++ {pos}}
+                              results ++= [await m.getTests{newpath}]
+                        pos += 1
+                        curr = iter.next{}
+                     promise ->
+                        curr = iter.next{await promise}
             catch error:
-               yield #error{path, s, error, s.subdescr.length - pos}
-            pass
+               results.push with #error{path, s, error, s.subdescr.length - pos}
+            results
 
-   gen! generateResults{} =
-      for test of @generateTests{}:
-         match test:
-            #test{path, t} ->
-               yield #testResult{path, t, t.execute{}}
-            #error ->
-               yield test
+   async! getResults{} =
+      [await @getTests{}] each match test ->
+         #test{path, t} ->
+            #testResult{path, t, await t.execute{}}
+         #error ->
+            test
 
-   execute{} =
-      res = {}
-      for x of @generateResults{}:
-         res.push with x
-      res
+
+   ;; gen! generateTests{var path = {}} =
+   ;;    match @suite:
+   ;;       when @mask === false ->
+   ;;          pass
+   ;;       Test? t ->
+   ;;          yield #test{path, t}
+   ;;       TestSuite? s ->
+   ;;          if Number? path[path.length - 1]:
+   ;;             path[path.length - 1] = s.descr
+   ;;          else:
+   ;;             path ++= {s.descr}
+   ;;          var pos = 0
+   ;;          try:
+   ;;             for test of s.generateTests{}:
+   ;;                match if{@mask === true, @mask, @mask[pos]}:
+   ;;                   undefined? ->
+   ;;                      break
+   ;;                   false? ->
+   ;;                      pass
+   ;;                   submask ->
+   ;;                      m = TestMask{test, submask}
+   ;;                      yield all m.generateTests{newpath} where newpath =
+   ;;                         if{s.subdescr.length == 1, path, path ++ {pos}}
+   ;;                pos += 1
+   ;;          catch error:
+   ;;             yield #error{path, s, error, s.subdescr.length - pos}
+   ;;          pass
+
+   ;; gen! generateResults{} =
+   ;;    for test of @generateTests{}:
+   ;;       match test:
+   ;;          #test{path, t} ->
+   ;;             yield #testResult{path, t, t.execute{}}
+   ;;          #error ->
+   ;;             yield test
+
+   ;; execute{} =
+   ;;    res = {}
+   ;;    for x of @generateResults{}:
+   ;;       res.push with x
+   ;;    res
 
 
 class Test:
@@ -206,7 +250,7 @@ async! formatTests{tsts} =
          Number? n -> "Test #" + n
          s -> s
 
-   for test of tsts.generateResults{}:
+   for test of [await tsts.getResults{}]:
       match test:
          #testResult{path, test, x} ->
             match [await x]:
