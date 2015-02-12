@@ -1,0 +1,245 @@
+
+
+provide:
+   tests
+   TestMask
+   Test
+   TestSuite
+   formatTests
+
+
+   
+global.___letest_global = exports
+
+
+tests{ctx, scope, form, #data{descr, _body}} =
+
+   letest = #variable{"___letest_global"}
+
+   parseDescription{match d} =
+      #value{String! s} ->
+         tags = [s.match{R.g"#[a-zA-Z0-9_-]+"} or {}] each
+            tag -> #value{tag.slice{1}}
+         `{^d, {^*tags}}`
+      #void{} ->
+         `{"", {}}`
+      else ->
+         throw E.tests.description{"Invalid description."}
+
+   processSuite{#multi! #multi{*stmts}} =
+      var index = 0
+      let tests = #data{}
+      let body = #multi{}
+      reg{descr, subtests} =
+         tests.push with #data{
+            descr
+            subtests
+         }
+      stmts each parse! match ->
+         #suite{descr, suite} ->
+            {let subtests, newsuite} = processSuite{suite}
+            reg{descr, subtests}
+            body.push with
+               `[yield [^letest].TestSuite{^descr, ^subtests, {} *-> ^newsuite}]`
+         #test{expr} ->
+            reg{`{^=index, null}`, `null`}
+            loc = expr.location or {source = {}}
+            body.push with
+               ```
+                  yield [^letest].Test{
+                     async{{} -> ^expr}
+                     #location{^=loc.source.url, ^=loc.start, ^=loc.end}
+                  }
+               ```
+            index += 1
+         #do{#multi! #multi{*things}} ->
+            body.push with
+               #splice{*things}
+
+      {tests, body}
+
+   parse{match} =
+      `[^descr => ^body]` ->
+         #suite{parseDescription{descr}, body}
+      `[do: ^things]` ->
+         #do{things}
+      expr ->
+         #test{expr}
+
+   {v, description, body} = match descr:
+      v and #symbol{name} ->
+         {v, #value{"#" + name}, _body}
+      #send{v and #symbol{name}, `{^ #value{descr}}` or #value{descr}} ->
+         {v, #value{String{descr} + " #" + name}, _body}
+
+   {subtests, suite} = processSuite{body}
+   `[^v = [^letest].TestSuite{^parseDescription{description}, ^subtests, {} *-> ^suite}]`
+
+
+matchtags{tags1, tags2} =
+   tags1 each t1 ->
+      tags2 each t2 ->
+         if t1 == t2:
+            return true
+      pass
+   false
+
+
+class TestMask:
+
+   constructor{@suite, @mask, @count = 0} =
+      pass
+
+   gen! generateTests{var path = {}} =
+      match @suite:
+         when @mask === false ->
+            pass
+         Test? t ->
+            yield #test{path, t}
+         TestSuite? s ->
+            if Number? path[path.length - 1]:
+               path[path.length - 1] = s.descr
+            else:
+               path ++= {s.descr}
+            var pos = 0
+            try:
+               for test of s.generateTests{}:
+                  match if{@mask === true, @mask, @mask[pos]}:
+                     undefined? ->
+                        break
+                     false? ->
+                        pass
+                     submask ->
+                        m = TestMask{test, submask}
+                        yield all m.generateTests{newpath} where newpath =
+                           if{s.subdescr.length == 1, path, path ++ {pos}}
+                  pos += 1
+            catch error:
+               yield #error{path, s, error, s.subdescr.length - pos}
+            pass
+
+   gen! generateResults{} =
+      for test of @generateTests{}:
+         match test:
+            #test{path, t} ->
+               yield #testResult{path, t, t.execute{}}
+            #error ->
+               yield test
+
+   execute{} =
+      res = {}
+      for x of @generateResults{}:
+         res.push with x
+      res
+
+
+class Test:
+   constructor{@test, @source} =
+      pass
+   async! execute{} =
+      try:
+         match [await @test{}]:
+            === true ->
+               #success{}
+            === false ->
+               #failure{}
+            res and [#success or #failure] ->
+               res
+            other ->
+               #error{E.tests.protocol{..., other}} with
+                  "Tests must return true, false, #success{...} or #failure{...}"
+      catch error:
+         #error{error}
+
+
+class TestSuite:
+
+   constructor{{@descr, @tags}, @subdescr, @generateTests} =
+      pass
+
+   select{white = true, black = {}} =
+      trim{arr} =
+         var i = arr.length - 1
+         while i > 0 and arr[i] === false:
+            arr.pop{}
+            i -= 1
+         arr
+
+      var count = 0
+      mask = helper{@tags, @subdescr, false} where
+         helper{t, sd, default} =
+            if sd === null:
+               if default: count += 1
+               default
+            elif matchtags{t, black}:
+               false
+            elif white === true or matchtags{t, white}:
+               res = sd each {{_, t}, sd} -> helper{t, sd, true}
+               res.every{{x} -> x} or trim{res}
+            else:
+               res = sd each {{_, t}, sd} -> helper{t, sd, default}
+               res.every{{x} -> x} or [res.some{{x} -> x} and trim{res}]
+
+      TestMask{@, mask, count}
+
+   execute{} =
+      @select{true}.execute{}
+
+
+
+
+async! formatTests{tsts} =
+   error_reports = {}
+
+   var successes = 0
+   var failures = 0
+   var errors = 0
+
+   stream = process.stdout
+   tick{} =
+      stream.clearLine{}
+      stream.cursorTo{0}
+      stream.write{"Successes: " + successes + ", Failures: " + failures + ", Errors: " + errors}
+
+   fmtp{path} =
+      [p.join{" => "}] where p = path each
+         Number? n -> "Test #" + n
+         s -> s
+
+   for test of tsts.generateResults{}:
+      match test:
+         #testResult{path, test, x} ->
+            match [await x]:
+               #success ->
+                  successes += 1
+                  tick{}
+               #failure ->
+                  failures += 1
+                  tick{}
+                  var report = "FAILURE: " + fmtp{path} + "\n"
+                  report += "SOURCE: " + test.source + "\n"
+                  error_reports.push with report
+               #error{error} ->
+                  errors += 1
+                  tick{}
+                  var report = "ERROR: " + fmtp{path} + "\n"
+                  report += "SOURCE: " + test.source + "\n"
+                  report += String{error} + "\n"
+                  error_reports.push with report
+         #error{path, suite, error, count} ->
+            errors += count
+            tick{}
+            var report = "ERROR: " + fmtp{path} + "\n"
+            report += count + " tests could not be run because of this error." + "\n"
+            error_reports.push with report
+
+   console.log{}
+
+   error_reports each report ->
+      console.log with "\n==========="
+      console.log with report
+
+   console.log with "Done."
+
+   pass
+
