@@ -7,10 +7,8 @@ provide:
    TestSuite
    formatTests
 
-
    
 global.___letest_global = exports
-
 
 tests{ctx, scope, form, #data{descr, _body}} =
 
@@ -20,51 +18,39 @@ tests{ctx, scope, form, #data{descr, _body}} =
       #value{String! s} ->
          tags = [s.match{R.g"#[a-zA-Z0-9_-]+"} or {}] each
             tag -> #value{tag.slice{1}}
-         `{^d, {^*tags}}`
+         {d, `{^*tags}`}
       #void{} ->
-         `{"", {}}`
+         {`""`, `{}`}
       else ->
          throw E.tests.description{"Invalid description."}
 
    processSuite{#multi! #multi{*stmts}} =
+
+      {let body, let tests} = match stmts:
+         {`do: ^[#multi! #multi{*b}]`, *rest} ->
+            {#multi{*b}, rest}
+         xs ->
+            {#multi{}, xs}
+
       var index = 0
-      let tests = #data{}
-      let body = #multi{}
-      reg{descr, subtests} =
-         tests.push with #data{
-            descr
-            subtests
-         }
-      stmts each parse! match ->
-         #suite{descr, suite} ->
-            {let subtests, newsuite} = processSuite{suite}
-            reg{descr, subtests}
-            body.push with
-               `[yield [^letest].TestSuite{^descr, ^subtests, {} *-> ^newsuite}]`
-         #test{expr} ->
-            reg{`{^=index, null}`, `null`}
-            loc = expr.location or {source = {}}
-            body.push with
-               ```
-                  yield [^letest].Test{
-                     async{{} -> ^expr}
-                     #location{^=loc.source.url, ^=loc.start, ^=loc.end}
-                  }
-               ```
+      let gene = #data{}
+      let descrs = #data{}
+
+      tests each
+         `do: ^_` ->
+            throw E.letest{"do: statement must be at the beginning of the block."}
+         `^descr => ^b` ->
+            {txt, tags} = parseDescription{descr}
+            {g, s} = processSuite{b}
+            gene.push with g
+            descrs.push with `#suite{^txt, ^tags, ^s}`
+         expr ->
+            gene.push with `async{{} -> ^expr}`
+            descrs.push with `#test{^=index, null, null}`
             index += 1
-         #do{#multi! #multi{*things}} ->
-            body.push with
-               #splice{*things}
 
-      {tests, body}
-
-   parse{match} =
-      `[^descr => ^body]` ->
-         #suite{parseDescription{descr}, body}
-      `[do: ^things]` ->
-         #do{things}
-      expr ->
-         #test{expr}
+      body.push{gene}
+      {`async{{} -> ^body}`, descrs}
 
    {v, description, body} = match descr:
       v and #symbol{name} ->
@@ -72,109 +58,45 @@ tests{ctx, scope, form, #data{descr, _body}} =
       #send{v and #symbol{name}, `{^ #value{descr}}` or #value{descr}} ->
          {v, #value{String{descr} + " #" + name}, _body}
 
-   {subtests, suite} = processSuite{body}
-   `[^v = [^letest].TestSuite{^parseDescription{description}, ^subtests, {} *-> ^suite}]`
+   {gene, trees} = processSuite{body}
+   {d, t} = parseDescription{description}
+
+   `[^v = [^letest].TestSuite{#suite{^d, ^t, ^trees}, ^gene}]`
 
 
-matchtags{tags1, tags2} =
-   tags1 each t1 ->
-      tags2 each t2 ->
-         if t1 == t2:
-            return true
-      pass
-   false
+class TestSuite:
 
-
-class TestMask:
-
-   constructor{@suite, @mask, @count = 0} =
+   constructor{@descr, @gen} =
       pass
 
-   async! getTests{var path = {}} =
-      match @suite:
-         when @mask === false ->
-            pass
-         Test? t ->
-            {#test{path, t}}
-         TestSuite? s ->
-            if Number? path[path.length - 1]:
-               path[path.length - 1] = s.descr
+   select{white = true, black = {}} =
+      trim{arr} =
+         var i = arr.length - 1
+         while i > 0 and arr[i] === false:
+            arr.pop{}
+            i -= 1
+         arr
+
+      {_, text, tags, subdescr} = @descr
+      var count = 0
+      mask = helper{tags, subdescr, false} where
+         helper{t, sd, default} =
+            if sd === null:
+               if default: count += 1
+               default
+            elif matchtags{t, black}:
+               false
+            elif white === true or matchtags{t, white}:
+               res = sd each {_, _, t, sd} -> helper{t, sd, true}
+               res.every{{x} -> x === true} or trim{res}
             else:
-               path ++= {s.descr}
-            var pos = 0
-            var results = {}
-            try:
-               iter = s.generateTests{}
-               var curr = iter.next{}
-               while not curr.done:
-                  match curr.value:
-                     Test? test or TestSuite? test ->
-                        match if{@mask === true, @mask, @mask[pos]}:
-                           undefined? ->
-                              break
-                           false? ->
-                              pass
-                           submask ->
-                              m = TestMask{test, submask}
-                              newpath = if{s.subdescr.length == 1, path, path ++ {pos}}
-                              results ++= [await m.getTests{newpath}]
-                        pos += 1
-                        curr = iter.next{}
-                     promise ->
-                        curr = iter.next{await promise}
-            catch error:
-               results.push with #error{path, s, error, s.subdescr.length - pos}
-            results
+               res = sd each {_, _, t, sd} -> helper{t, sd, default}
+               res.every{{x} -> x === true} or [res.some{{x} -> x} and trim{res}]
 
-   async! getResults{} =
-      [await @getTests{}] each match test ->
-         #test{path, t} ->
-            #testResult{path, t, await t.execute{}}
-         #error ->
-            test
+      TestMask{@descr, @gen, mask, count}
 
-
-   ;; gen! generateTests{var path = {}} =
-   ;;    match @suite:
-   ;;       when @mask === false ->
-   ;;          pass
-   ;;       Test? t ->
-   ;;          yield #test{path, t}
-   ;;       TestSuite? s ->
-   ;;          if Number? path[path.length - 1]:
-   ;;             path[path.length - 1] = s.descr
-   ;;          else:
-   ;;             path ++= {s.descr}
-   ;;          var pos = 0
-   ;;          try:
-   ;;             for test of s.generateTests{}:
-   ;;                match if{@mask === true, @mask, @mask[pos]}:
-   ;;                   undefined? ->
-   ;;                      break
-   ;;                   false? ->
-   ;;                      pass
-   ;;                   submask ->
-   ;;                      m = TestMask{test, submask}
-   ;;                      yield all m.generateTests{newpath} where newpath =
-   ;;                         if{s.subdescr.length == 1, path, path ++ {pos}}
-   ;;                pos += 1
-   ;;          catch error:
-   ;;             yield #error{path, s, error, s.subdescr.length - pos}
-   ;;          pass
-
-   ;; gen! generateResults{} =
-   ;;    for test of @generateTests{}:
-   ;;       match test:
-   ;;          #test{path, t} ->
-   ;;             yield #testResult{path, t, t.execute{}}
-   ;;          #error ->
-   ;;             yield test
-
-   ;; execute{} =
-   ;;    res = {}
-   ;;    for x of @generateResults{}:
-   ;;       res.push with x
-   ;;    res
+   execute{} =
+      @select{true}.execute{}
 
 
 class Test:
@@ -196,40 +118,56 @@ class Test:
          #error{error}
 
 
-class TestSuite:
+matchtags{tags1, tags2} =
+   tags1 each t1 ->
+      tags2 each t2 ->
+         if t1 == t2:
+            return true
+      pass
+   false
 
-   constructor{{@descr, @tags}, @subdescr, @generateTests} =
+
+class TestMask:
+
+   constructor{@descr, @gen, @mask, @count = 0} =
       pass
 
-   select{white = true, black = {}} =
-      trim{arr} =
-         var i = arr.length - 1
-         while i > 0 and arr[i] === false:
-            arr.pop{}
-            i -= 1
-         arr
-
-      var count = 0
-      mask = helper{@tags, @subdescr, false} where
-         helper{t, sd, default} =
-            if sd === null:
-               if default: count += 1
-               default
-            elif matchtags{t, black}:
-               false
-            elif white === true or matchtags{t, white}:
-               res = sd each {{_, t}, sd} -> helper{t, sd, true}
-               res.every{{x} -> x} or trim{res}
+   async! getTests{var path = {}} =
+      match @descr:
+         when @mask === false ->
+            pass
+         #test{*} ->
+            {#test{path, Test{@gen, null}}}
+         #suite{d, t, sub} ->
+            if Number? path[path.length - 1]:
+               path[path.length - 1] = d
             else:
-               res = sd each {{_, t}, sd} -> helper{t, sd, default}
-               res.every{{x} -> x} or [res.some{{x} -> x} and trim{res}]
+               path ++= {d}
+            var pos = 0
+            var results = {}
+            try:
+               tests = await @gen{}
+               tests each test ->
+                  match if{@mask === true, @mask, @mask[pos]}:
+                     undefined? ->
+                        break
+                     false? ->
+                        pass
+                     submask ->
+                        m = TestMask{sub[pos], test, submask}
+                        newpath = if{sub.length == 1, path, path ++ {pos}}
+                        results ++= [await m.getTests{newpath}]
+                  pos += 1
+            catch error:
+               results.push with #error{path, error, tests.length - pos}
+            results
 
-      TestMask{@, mask, count}
-
-   execute{} =
-      @select{true}.execute{}
-
-
+   async! getResults{} =
+      [await @getTests{}] each match test ->
+         #test{path, t} ->
+            #testResult{path, t, await t.execute{}}
+         #error ->
+            test
 
 
 async! formatTests{tsts} =
@@ -250,7 +188,9 @@ async! formatTests{tsts} =
          Number? n -> "Test #" + n
          s -> s
 
-   for test of [await tsts.getResults{}]:
+   alltests = await tsts.getResults{}
+
+   for test of alltests:
       match test:
          #testResult{path, test, x} ->
             match [await x]:
@@ -286,4 +226,3 @@ async! formatTests{tsts} =
    console.log with "Done."
 
    pass
-
