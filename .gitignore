@@ -1,0 +1,5 @@
+*~
+*.map
+lib
+node_modules
+junk
