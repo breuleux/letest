@@ -10,6 +10,42 @@ provide:
    
 global.___letest_global = exports
 
+
+class RaceGen:
+
+   constructor{@promises} =
+      @n = 0
+      @proms = {}
+      @marks = {}
+      @add{@promises}
+      @done = @n == 0
+
+   add{promises} =
+      promises each p ->
+         mark = {=}
+         @marks.push{mark}
+         @proms.push{async{{} -> {mark, await p}}{}}
+      @n += promises.length
+      @done = @n == 0
+
+   async! next{} =
+      if @done:
+         null
+      else:
+         {mark, res} = await Promise.race{@proms}
+         i = @marks.indexOf{mark}
+         @proms.splice{i, 1}
+         @marks.splice{i, 1}
+         @n -= 1
+         @done = @n == 0
+         match res:
+            RaceGen? ->
+               @add{res.promises}
+               @next{}
+            else ->
+               res
+
+
 tests{ctx, scope, form, #data{descr, _body}} =
 
    letest = #variable{"___letest_global"}
@@ -132,21 +168,21 @@ class TestMask:
    constructor{@descr, @gen, @mask, @count = 0} =
       pass
 
-   async! getTests{var path = {}} =
+   async! generateTests{var path = {}} =
       match @descr:
          when @mask === false ->
-            pass
+            RaceGen with {}
          #test{*} ->
-            {#test{path, Test{@gen, null}}}
+            RaceGen with {#test{path, Test{@gen, null}}}
          #suite{d, t, sub} ->
             if Number? path[path.length - 1]:
                path[path.length - 1] = d
             else:
                path ++= {d}
             var pos = 0
-            var results = {}
+            var gens = {}
             try:
-               tests = await @gen{}
+               let tests = await @gen{}
                tests each test ->
                   match if{@mask === true, @mask, @mask[pos]}:
                      undefined? ->
@@ -156,18 +192,25 @@ class TestMask:
                      submask ->
                         m = TestMask{sub[pos], test, submask}
                         newpath = if{sub.length == 1, path, path ++ {pos}}
-                        results ++= [await m.getTests{newpath}]
+                        gens.push with m.generateTests{newpath}
                   pos += 1
             catch error:
-               results.push with #error{path, error, tests.length - pos}
-            results
+               gens.push with #error{path, error, tests.length - pos}
+            RaceGen{gens}
 
-   async! getResults{} =
-      [await @getTests{}] each match test ->
-         #test{path, t} ->
-            #testResult{path, t, await t.execute{}}
-         #error ->
-            test
+   async! generateResults{} =
+      tg = await @generateTests{}
+      self = {
+         done = tg.done
+         async! next{} =
+            test = await tg.next{}
+            self.done = tg.done
+            match test:
+               #test{path, t} ->
+                  #testResult{path, t, await t.execute{}}
+               #error ->
+                  test
+      }
 
 
 async! formatTests{tsts} =
@@ -188,9 +231,10 @@ async! formatTests{tsts} =
          Number? n -> "Test #" + n
          s -> s
 
-   alltests = await tsts.getResults{}
+   tg = await tsts.generateResults{}
 
-   for test of alltests:
+   while not tg.done:
+      test = await tg.next{}
       match test:
          #testResult{path, test, x} ->
             match [await x]:
