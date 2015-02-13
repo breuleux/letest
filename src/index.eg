@@ -18,7 +18,6 @@ class RaceGen:
       @proms = {}
       @marks = {}
       @add{@promises}
-      @done = @n == 0
 
    add{promises} =
       promises each p ->
@@ -26,24 +25,22 @@ class RaceGen:
          @marks.push{mark}
          @proms.push{async{{} -> {mark, await p}}{}}
       @n += promises.length
-      @done = @n == 0
 
    async! next{} =
-      if @done:
-         null
+      if @n == 0:
+         {value = undefined, done = true}
       else:
          {mark, res} = await Promise.race{@proms}
          i = @marks.indexOf{mark}
          @proms.splice{i, 1}
          @marks.splice{i, 1}
          @n -= 1
-         @done = @n == 0
          match res:
             RaceGen? ->
                @add{res.promises}
                @next{}
             else ->
-               res
+               {value = res, done = false}
 
 
 tests{ctx, scope, form, #data{descr, _body}} =
@@ -58,7 +55,7 @@ tests{ctx, scope, form, #data{descr, _body}} =
       #void{} ->
          {`""`, `{}`}
       else ->
-         throw E.tests.description{"Invalid description."}
+         throw E.letest.syntax.description{"Invalid description.", {node = d}}
 
    processSuite{#multi! #multi{*stmts}} =
 
@@ -72,9 +69,12 @@ tests{ctx, scope, form, #data{descr, _body}} =
       let gene = #data{}
       let descrs = #data{}
 
-      tests each
+      tests each match test ->
          `do: ^_` ->
-            throw E.letest{"do: statement must be at the beginning of the block."}
+            throw E.letest.syntax{
+               "do: statement must be at the beginning of the block."
+               {node = test}
+            }
          `^descr => ^b` ->
             {txt, tags} = parseDescription{descr}
             {g, s} = processSuite{b}
@@ -201,15 +201,16 @@ class TestMask:
    async! generateResults{} =
       tg = await @generateTests{}
       self = {
-         done = tg.done
          async! next{} =
-            test = await tg.next{}
-            self.done = tg.done
-            match test:
+            {value => test, => done} = await tg.next{}
+            if done:
+               return {value = undefined, done = true}
+            rval = match test:
                #test{path, t} ->
                   #testResult{path, t, await t.execute{}}
                #error ->
                   test
+            {value = rval, done = false}
       }
 
 
@@ -232,9 +233,10 @@ async! formatTests{tsts} =
          s -> s
 
    tg = await tsts.generateResults{}
+   var curr = await tg.next{}
 
-   while not tg.done:
-      test = await tg.next{}
+   while not curr.done:
+      test = curr.value
       match test:
          #testResult{path, test, x} ->
             match [await x]:
@@ -260,6 +262,8 @@ async! formatTests{tsts} =
             var report = "ERROR: " + fmtp{path} + "\n"
             report += count + " tests could not be run because of this error." + "\n"
             error_reports.push with report
+
+      curr = await tg.next{}
 
    console.log{}
 
