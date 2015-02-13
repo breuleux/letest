@@ -188,8 +188,8 @@ class TestSuite:
 
       TestMask{@descr, @gen, mask, count}
 
-   execute{} =
-      @select{true}.execute{}
+   generator{} =
+      @select{true}.generator{}
 
 
 class Test:

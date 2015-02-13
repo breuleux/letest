@@ -17,7 +17,7 @@ Simple example:
        "when dividing a number by zero" =>
           "we get infinity" =>
              42 / 0 == Infinity
-       "but when dividing zero by zero #bap" =>
+       "but when dividing zero by zero #zerobyzero" =>
           do:
              n = 0 / 0
           "we get a value which" =>
@@ -26,7 +26,9 @@ Simple example:
              "is not equal to itself" =>
                 n != n
 
-    formatTests{misc.select{}}
+    formatTests{misc}
+
+    formatTests{misc.select{{"zerobyzero"}}}
 
 All tests are executed asynchronously and their results are collated
 in the order that they finish. `do` blocks are executed before the
@@ -58,4 +60,24 @@ executed while the first is waiting.
           x.shift{} == 4
           x.shift{} == 5
 
+Test descriptions (left of the fat `=>` arrow) can contain
+hashtags. The `select` method on a test suite can be used to only run
+the tests that match a set of hashtags (the whitelist), and don't
+match any of a second set of hashtags (the blacklist). For instance:
+
+    hello{name} = "hello " + name
+    tests selections:
+       "helloing #hello" =>
+          hello{"alice"} == "hello alice"
+          hello{"bob"} == "hello bob"
+          "#delayed" =>
+             do: await wait{1000}
+             hello{"clara"} == "hello clara"
+          hello{"dog"} == "hello dog"
+       "calculating #calc" =>
+          1 + 2 == 3
+
+    ;; This selects tests with the tag "hello" but not the tag "delayed"
+    ;; Three tests match: hello alice, hello bob and hello dog
+    formatTests{selections.select{{"hello"}, {"delayed"}}}
 
