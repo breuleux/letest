@@ -14,7 +14,6 @@ global.___letest_global = exports
 class RaceGen:
 
    constructor{@promises} =
-      @n = 0
       @proms = {}
       @marks = {}
       @add{@promises}
@@ -24,20 +23,62 @@ class RaceGen:
          mark = {=}
          @marks.push{mark}
          @proms.push{async{{} -> {mark, await p}}{}}
-      @n += promises.length
 
    async! next{} =
-      if @n == 0:
+      if @proms.length == 0:
          {value = undefined, done = true}
       else:
-         {mark, res} = await Promise.race{@proms}
+         {mark, res, var repl = null, valid = true} =
+            await Promise.race{@proms}
+
          i = @marks.indexOf{mark}
-         @proms.splice{i, 1}
-         @marks.splice{i, 1}
-         @n -= 1
+         if repl == null:
+            @proms.splice{i, 1}
+            @marks.splice{i, 1}
+         else:
+            @proms[i] = repl{}
+
+         if not valid:
+            return @next{}
+
          match res:
+            SeqGen? ->
+               mark = {=}
+               @marks.push{mark}
+               mknext{} =
+                  async: {} ->
+                     x = await res.next{}
+                     {mark, x.value, if{x.done, null, mknext{}}, not x.done}
+               @proms.push{mknext{}{}}
+               @next{}
             RaceGen? ->
-               @add{res.promises}
+               @marks ++= res.marks
+               @proms ++= res.proms
+               @next{}
+            else ->
+               {value = res, done = false}
+
+
+class SeqGen:
+
+   constructor{clone! @promises} =
+      @sub = null
+
+   async! next{} =
+      if @sub:
+         r = await @sub.next{}
+         if r.done:
+            @sub = null
+            @next{}
+         else:
+            r
+      elif @promises.length == 0:
+         {value = undefined, done = true}
+      else:
+         res = await @promises.shift{}{}
+         match res:
+            RaceGen? or SeqGen? ->
+               @sub = res
                @next{}
             else ->
                {value = res, done = false}
@@ -75,12 +116,28 @@ tests{ctx, scope, form, #data{descr, _body}} =
                "do: statement must be at the beginning of the block."
                {node = test}
             }
+         `inorder ^descr => ^b` or `inorder: ^b` and descr is null ->
+            {txt, tags} =
+               if descr == null:
+                  index += 1
+                  {#value{index}, `{}`}
+               else:
+                  parseDescription{descr}
+            {g, s} = processSuite{b}
+            gene.push with g
+            descrs.push with `#seqsuite{^txt, ^tags, ^s}`
          `^descr => ^b` ->
             {txt, tags} = parseDescription{descr}
             {g, s} = processSuite{b}
             gene.push with g
             descrs.push with `#suite{^txt, ^tags, ^s}`
-         expr ->
+         `inorder: ^b` ->
+            txt = #value{index}
+            tags = `{}`
+            {g, s} = processSuite{b}
+            gene.push with g
+            descrs.push with `#seqsuite{^txt, ^tags, ^s}`
+         `test: ^expr` or expr ->
             gene.push with `async{{} -> ^expr}`
             descrs.push with `#test{^=index, null, null}`
             index += 1
@@ -168,13 +225,19 @@ class TestMask:
    constructor{@descr, @gen, @mask, @count = 0} =
       pass
 
-   async! generateTests{var path = {}} =
+   async! generator{var path = {}} =
+
       match @descr:
          when @mask === false ->
             RaceGen with {}
+
          #test{*} ->
-            RaceGen with {#test{path, Test{@gen, null}}}
-         #suite{d, t, sub} ->
+            async! dotest{} =
+               t = Test{@gen, null}
+               #testResult{path, t, await t.execute{}}
+            RaceGen with {dotest{}}
+
+         {kind in {.suite, .seqsuite}, d, t, sub} ->
             if Number? path[path.length - 1]:
                path[path.length - 1] = d
             else:
@@ -184,34 +247,17 @@ class TestMask:
             try:
                let tests = await @gen{}
                tests each test ->
-                  match if{@mask === true, @mask, @mask[pos]}:
-                     undefined? ->
-                        break
-                     false? ->
-                        pass
-                     submask ->
-                        m = TestMask{sub[pos], test, submask}
-                        newpath = if{sub.length == 1, path, path ++ {pos}}
-                        gens.push with m.generateTests{newpath}
+                  submask = if{@mask === true, @mask, @mask[pos]}
+                  if submask:
+                     m = TestMask{sub[pos], test, submask}
+                     newpath = if{sub.length == 1, path, path ++ {pos}}
+                     gens.push with {} -> m.generator{newpath}
                   pos += 1
             catch error:
                gens.push with #error{path, error, tests.length - pos}
-            RaceGen{gens}
-
-   async! generateResults{} =
-      tg = await @generateTests{}
-      self = {
-         async! next{} =
-            {value => test, => done} = await tg.next{}
-            if done:
-               return {value = undefined, done = true}
-            rval = match test:
-               #test{path, t} ->
-                  #testResult{path, t, await t.execute{}}
-               #error ->
-                  test
-            {value = rval, done = false}
-      }
+            match kind:
+               .suite -> RaceGen{gens each g -> g{}}
+               .seqsuite -> SeqGen{gens}
 
 
 async! formatTests{tsts} =
@@ -232,7 +278,7 @@ async! formatTests{tsts} =
          Number? n -> "Test #" + n
          s -> s
 
-   tg = await tsts.generateResults{}
+   tg = await tsts.generator{}
    var curr = await tg.next{}
 
    while not curr.done:
