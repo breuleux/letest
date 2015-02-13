@@ -1,0 +1,25 @@
+{
+  "name": "letest",
+  "version": "0.0.0",
+  "description": "Asynchronous testing framework for Earl Grey.",
+  "main": "./lib/index.js",
+  "dependencies": {
+    "earlgrey-runtime": "0.0.0"
+  },
+  "bin": {
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "homepage": "https://github.com/breuleux/letest",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/breuleux/letest"
+  },
+  "keywords": [
+    "Test",
+    "Earl Grey"
+  ],
+  "author": "Olivier Breuleux",
+  "license": "MIT"
+}
