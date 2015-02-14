@@ -41,24 +41,24 @@ this can be done in the initial `do` block).
 The `await` keyword can be used in the `do` blocks or in any test to
 do asynchronous operations, e.g. fetch web pages.
 
-The `inorder` keyword may be used to guarantee that the tests will be
+The `seq` keyword may be used to guarantee that the tests will be
 executed in the order of their definition. For instance, the following
-tests will only pass if the `inorder` directive is used. Otherwise
+tests will only pass if the `seq` directive is used. Otherwise
 they will all fail because the second to fifth shift tests will be
 executed while the first is waiting.
 
     wait = promisify{{d, f} -> setTimeout{f, d}}
     tests ordered:
-       inorder "shift" =>
+       seq "shift" =>
           do:
              x = {1, 2, 3, 4, 5}
-          test:
+          =>
              await wait{1000}
              x.shift{} == 1
-          x.shift{} == 2
-          x.shift{} == 3
-          x.shift{} == 4
-          x.shift{} == 5
+          => x.shift{} == 2
+          => x.shift{} == 3
+          => x.shift{} == 4
+          => x.shift{} == 5
 
 Test descriptions (left of the fat `=>` arrow) can contain
 hashtags. The `select` method on a test suite can be used to only run
@@ -68,12 +68,12 @@ match any of a second set of hashtags (the blacklist). For instance:
     hello{name} = "hello " + name
     tests selections:
        "helloing #hello" =>
-          hello{"alice"} == "hello alice"
-          hello{"bob"} == "hello bob"
-          "#delayed" =>
+          1 => hello{"alice"} == "hello alice"
+          2 => hello{"bob"} == "hello bob"
+          "3 #delayed" =>
              do: await wait{1000}
              hello{"clara"} == "hello clara"
-          hello{"dog"} == "hello dog"
+          4 => hello{"dog"} == "hello dog"
        "calculating #calc" =>
           1 + 2 == 3
 

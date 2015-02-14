@@ -14,6 +14,7 @@ global.___letest_global = exports
 class RaceGen:
 
    constructor{@promises} =
+      @total = 0
       @proms = {}
       @marks = {}
       @add{@promises}
@@ -23,6 +24,7 @@ class RaceGen:
          mark = {=}
          @marks.push{mark}
          @proms.push{async{{} -> {mark, await p}}{}}
+      @total += promises.length
 
    async! next{} =
       if @proms.length == 0:
@@ -43,7 +45,8 @@ class RaceGen:
 
          match res:
             SeqGen? ->
-               mark = {=}
+               @total += res.total
+               let mark = {=}
                @marks.push{mark}
                mknext{} =
                   async: {} ->
@@ -52,6 +55,7 @@ class RaceGen:
                @proms.push{mknext{}{}}
                @next{}
             RaceGen? ->
+               @total += res.total
                @marks ++= res.marks
                @proms ++= res.proms
                @next{}
@@ -62,6 +66,7 @@ class RaceGen:
 class SeqGen:
 
    constructor{clone! @promises} =
+      @total = @promises.length
       @sub = null
 
    async! next{} =
@@ -78,15 +83,52 @@ class SeqGen:
          res = await @promises.shift{}{}
          match res:
             RaceGen? or SeqGen? ->
+               @total += res.total
                @sub = res
                @next{}
             else ->
                {value = res, done = false}
 
 
-tests{ctx, scope, form, #data{descr, _body}} =
+splitDo{clone! stmts} =
+   parts = {}
+   var stmt = false
+   var test = false
+
+   while stmts.length > 0:
+      s = stmts.shift{}
+      match s:
+         `do: ^b` when parts == {} ->
+            #multi! #multi{*contents} = b
+            test or= s
+            parts.push{#do{contents}}
+         `do: ^_` ->
+            test or= s
+            stmts.unshift{s}
+            parts.push{#label{#void{}, #multi{*stmts}}}
+            break
+         `^x => ^y` ->
+            test or= s
+            parts.push{#label{x, y}}
+         else ->
+            stmt or= s
+            parts.push{s}
+
+   if stmt and test:
+      throw E.letest.syntax{
+         "Normal statements define a test and cannot be mixed with do/=>."
+         {normstmt = stmt
+          teststmt = test}
+      }
+
+   {test != false, parts}
+
+
+tests{ctx, info, form, #data{lbl, _body}} =
+
 
    letest = #variable{"___letest_global"}
+
 
    parseDescription{match d} =
       #value{String! s} ->
@@ -98,10 +140,23 @@ tests{ctx, scope, form, #data{descr, _body}} =
       else ->
          throw E.letest.syntax.description{"Invalid description.", {node = d}}
 
-   processSuite{#multi! #multi{*stmts}} =
+
+   processBody{body and #multi! #multi{*stmts}, ord} =
+      match splitDo{stmts}:
+         {_, {}} ->
+            throw E.letest.syntax{"Body cannot be empty.", {body = body}}
+         {== true, tests} ->
+            processSuite{tests, ord}
+         {== false, stmts} ->
+            gener = `async{{} -> ^[#multi{*stmts}]}`
+            descr = `#test{}`
+            {gener, descr}
+
+
+   processSuite{stmts, defaultOrd} =
 
       {let body, let tests} = match stmts:
-         {`do: ^[#multi! #multi{*b}]`, *rest} ->
+         {#do{b}, *rest} ->
             {#multi{*b}, rest}
          xs ->
             {#multi{}, xs}
@@ -111,50 +166,32 @@ tests{ctx, scope, form, #data{descr, _body}} =
       let descrs = #data{}
 
       tests each match test ->
-         `do: ^_` ->
-            throw E.letest.syntax{
-               "do: statement must be at the beginning of the block."
-               {node = test}
-            }
-         `inorder ^descr => ^b` or `inorder: ^b` and descr is null ->
-            {txt, tags} =
-               if descr == null:
-                  index += 1
-                  {#value{index}, `{}`}
-               else:
-                  parseDescription{descr}
-            {g, s} = processSuite{b}
+         #label{l, body} ->
+            {parseDescription! {descr, tags}, ord} = match l:
+               `seq ^descr` -> {descr, .seq}
+               `seq`        -> {#value{index += 1}, .seq}
+               `par ^descr` -> {descr, .par}
+               `par`        -> {#value{index += 1}, .par}
+               #void{}      -> {#value{index += 1}, defaultOrd}
+               descr        -> {descr, defaultOrd}
+
+            {g, s} = processBody{body, ord}
             gene.push with g
-            descrs.push with `#seqsuite{^txt, ^tags, ^s}`
-         `^descr => ^b` ->
-            {txt, tags} = parseDescription{descr}
-            {g, s} = processSuite{b}
-            gene.push with g
-            descrs.push with `#suite{^txt, ^tags, ^s}`
-         `inorder: ^b` ->
-            txt = #value{index}
-            tags = `{}`
-            {g, s} = processSuite{b}
-            gene.push with g
-            descrs.push with `#seqsuite{^txt, ^tags, ^s}`
-         `test: ^expr` or expr ->
-            gene.push with `async{{} -> ^expr}`
-            descrs.push with `#test{^=index, null, null}`
-            index += 1
+            descrs.push with `#label{^descr, ^tags, {^=ord, ^s}}`
 
       body.push{gene}
-      {`async{{} -> ^body}`, descrs}
+      {`async{{} -> ^body}`, `#suite{^descrs}`}
 
-   {v, description, body} = match descr:
+   {v, description, body} = match lbl:
       v and #symbol{name} ->
          {v, #value{"#" + name}, _body}
-      #send{v and #symbol{name}, `{^ #value{descr}}` or #value{descr}} ->
-         {v, #value{String{descr} + " #" + name}, _body}
+      #send{v and #symbol{name}, `{^ #value{lbl}}` or #value{lbl}} ->
+         {v, #value{String{lbl} + " #" + name}, _body}
 
-   {gene, trees} = processSuite{body}
+   {gene, trees} = processBody{body, .par}
    {d, t} = parseDescription{description}
 
-   `[^v = [^letest].TestSuite{#suite{^d, ^t, ^trees}, ^gene}]`
+   `[^v = [^letest].TestSuite{#label{^d, ^t, ^trees}, ^gene}]`
 
 
 class TestSuite:
@@ -163,6 +200,9 @@ class TestSuite:
       pass
 
    select{white = true, black = {}} =
+      if white == true and black == {}:
+         return TestMask{@descr, @gen, true, 0}
+
       trim{arr} =
          var i = arr.length - 1
          while i > 0 and arr[i] === false:
@@ -170,21 +210,23 @@ class TestSuite:
             i -= 1
          arr
 
-      {_, text, tags, subdescr} = @descr
       var count = 0
-      mask = helper{tags, subdescr, false} where
-         helper{t, sd, default} =
-            if sd === null:
-               if default: count += 1
-               default
-            elif matchtags{t, black}:
+      mask = helper{@descr, false} where helper{match, default} =
+         #test{} ->
+            count += 1
+            default
+         #par{x} or #seq{x} ->
+            helper{x, default}
+         #label{d, t, x} ->
+            if matchtags{t, black}:
                false
-            elif white === true or matchtags{t, white}:
-               res = sd each {_, _, t, sd} -> helper{t, sd, true}
-               res.every{{x} -> x === true} or trim{res}
+            elif white == true or matchtags{t, white}:
+               helper{x, true}
             else:
-               res = sd each {_, _, t, sd} -> helper{t, sd, default}
-               res.every{{x} -> x === true} or [res.some{{x} -> x} and trim{res}]
+               helper{x, default}
+         #suite{subd} ->
+            res = subd each x -> helper{x, default}
+            res.every{{x} -> x === true} or [res.some{{x} -> x} and trim{res}]
 
       TestMask{@descr, @gen, mask, count}
 
@@ -225,23 +267,31 @@ class TestMask:
    constructor{@descr, @gen, @mask, @count = 0} =
       pass
 
-   async! generator{var path = {}} =
+   async! generator{var path = {}, ord = .par} =
 
       match @descr:
          when @mask === false ->
             RaceGen with {}
 
-         #test{*} ->
+         #test{} ->
             async! dotest{} =
                t = Test{@gen, null}
                #testResult{path, t, await t.execute{}}
             RaceGen with {dotest{}}
 
-         {kind in {.suite, .seqsuite}, d, t, sub} ->
+         {ord in {.par, .seq}, x} ->
+            m = TestMask{x, @gen, @mask, @count}
+            m.generator{path, ord}
+
+         #label{d, t, x} ->
             if Number? path[path.length - 1]:
                path[path.length - 1] = d
             else:
                path ++= {d}
+            m = TestMask{x, @gen, @mask, @count}
+            m.generator{path, ord}
+
+         #suite{sub} ->
             var pos = 0
             var gens = {}
             try:
@@ -251,16 +301,17 @@ class TestMask:
                   if submask:
                      m = TestMask{sub[pos], test, submask}
                      newpath = if{sub.length == 1, path, path ++ {pos}}
-                     gens.push with {} -> m.generator{newpath}
+                     gens.push with {} -> m.generator{newpath, ord}
                   pos += 1
             catch error:
                gens.push with #error{path, error, tests.length - pos}
-            match kind:
-               .suite -> RaceGen{gens each g -> g{}}
-               .seqsuite -> SeqGen{gens}
+            match ord:
+               .par -> RaceGen{gens each g -> g{}}
+               .seq -> SeqGen{gens}
 
 
 async! formatTests{tsts} =
+
    error_reports = {}
 
    var successes = 0
