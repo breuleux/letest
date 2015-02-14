@@ -200,8 +200,8 @@ class TestSuite:
       pass
 
    select{white = true, black = {}} =
-      if white == true and black == {}:
-         return TestMask{@descr, @gen, true, 0}
+      ;; if white == true and black == {}:
+      ;;    return TestMask{@descr, @gen, true, 0}
 
       trim{arr} =
          var i = arr.length - 1
@@ -304,7 +304,7 @@ class TestMask:
                      gens.push with {} -> m.generator{newpath, ord}
                   pos += 1
             catch error:
-               gens.push with #error{path, error, tests.length - pos}
+               gens.push with {} -> #error{path, error}
             match ord:
                .par -> RaceGen{gens each g -> g{}}
                .seq -> SeqGen{gens}
@@ -353,11 +353,13 @@ async! formatTests{tsts} =
                   report += "SOURCE: " + test.source + "\n"
                   report += String{error} + "\n"
                   error_reports.push with report
-         #error{path, suite, error, count} ->
-            errors += count
+         #error{path, error} ->
+            ;; errors += count
+            errors += 1
             tick{}
             var report = "ERROR: " + fmtp{path} + "\n"
-            report += count + " tests could not be run because of this error." + "\n"
+            report += String{error} + "\n"
+            ;; report += count + " tests could not be run because of this error." + "\n"
             error_reports.push with report
 
       curr = await tg.next{}
