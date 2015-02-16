@@ -6,8 +6,9 @@ provide:
    Test
    TestSuite
    formatTests
+   test_group
 
-   
+
 global.___letest_global = exports
 
 
@@ -90,7 +91,7 @@ class SeqGen:
                {value = res, done = false}
 
 
-splitDo{clone! stmts} =
+splitSetup{clone! stmts} =
    parts = {}
    var stmt = false
    var test = false
@@ -98,11 +99,15 @@ splitDo{clone! stmts} =
    while stmts.length > 0:
       s = stmts.shift{}
       match s:
-         `do: ^b` when parts == {} ->
+         `setup: ^b` when parts == {} ->
             #multi! #multi{*contents} = b
             test or= s
-            parts.push{#do{contents}}
-         `do: ^_` ->
+            parts.push{#setup{contents}}
+         `teardown: ^b` ->
+            #multi! #multi{*contents} = b
+            test or= s
+            parts.push{#teardown{contents}}
+         `setup: ^_` ->
             test or= s
             stmts.unshift{s}
             parts.push{#label{#void{}, #multi{*stmts}}}
@@ -116,7 +121,7 @@ splitDo{clone! stmts} =
 
    if stmt and test:
       throw E.letest.syntax{
-         "Normal statements define a test and cannot be mixed with do/=>."
+         "Normal statements define a test and cannot be mixed with setup/=>."
          {normstmt = stmt
           teststmt = test}
       }
@@ -142,7 +147,7 @@ tests{ctx, info, form, #data{lbl, _body}} =
 
 
    processBody{body and #multi! #multi{*stmts}, ord} =
-      match splitDo{stmts}:
+      match splitSetup{stmts}:
          {_, {}} ->
             throw E.letest.syntax{"Body cannot be empty.", {body = body}}
          {== true, tests} ->
@@ -156,7 +161,7 @@ tests{ctx, info, form, #data{lbl, _body}} =
    processSuite{stmts, defaultOrd} =
 
       {let body, let tests} = match stmts:
-         {#do{b}, *rest} ->
+         {#setup{b}, *rest} ->
             {#multi{*b}, rest}
          xs ->
             {#multi{}, xs}
@@ -164,8 +169,12 @@ tests{ctx, info, form, #data{lbl, _body}} =
       var index = 0
       let gene = #data{}
       let descrs = #data{}
+      var teardown = `null`
 
       tests each match test ->
+         #teardown{b} ->
+            teardown = `async{{} -> ^[#multi{*b}]}`
+
          #label{l, body} ->
             {parseDescription! {descr, tags}, ord} = match l:
                `seq ^descr` -> {descr, .seq}
@@ -179,7 +188,7 @@ tests{ctx, info, form, #data{lbl, _body}} =
             gene.push with g
             descrs.push with `#label{^descr, ^tags, {^=ord, ^s}}`
 
-      body.push{gene}
+      body.push{`[^letest].test_group{^gene, ^teardown}`}
       {`async{{} -> ^body}`, `#suite{^descrs}`}
 
    {v, description, body} = match lbl:
@@ -192,6 +201,30 @@ tests{ctx, info, form, #data{lbl, _body}} =
    {d, t} = parseDescription{description}
 
    `[^v = [^letest].TestSuite{#label{^d, ^t, ^trees}, ^gene}]`
+
+
+
+test_group{rawtests, teardown} =
+   var n = rawtests.length
+   if teardown:
+      rawtests each test ->
+         f where async! f{} =
+            try:
+               await test{}
+            finally:
+               n -= 1
+               if n == 0:
+                  try:
+                     await teardown{}
+                  catch e:
+                     print "ERROR IN TEARDOWN"
+                     console.trace{e}
+   else:
+      rawtests
+
+
+class TestGroup:
+   constructor{@rawtests, @teardown} =
 
 
 class TestSuite:
@@ -237,20 +270,24 @@ class TestSuite:
 class Test:
    constructor{@test, @source} =
       pass
+   accum{match} =
+      === true ->
+         {#success{}}
+      === false ->
+         {#failure{}}
+      #results{*[chain res]} ->
+         @map with {r} -> @accum{r}
+         @reduce with [++]
+      res and [#success or #failure or #error] ->
+         {res}
+      other ->
+         #error{E.tests.protocol{msg, other}} where
+            msg = "Tests must return true, false, #success{...} or #failure{...}"
    async! execute{} =
       try:
-         match [await @test{}]:
-            === true ->
-               #success{}
-            === false ->
-               #failure{}
-            res and [#success or #failure] ->
-               res
-            other ->
-               #error{E.tests.protocol{..., other}} with
-                  "Tests must return true, false, #success{...} or #failure{...}"
+         @accum{await @test{}}
       catch error:
-         #error{error}
+         {#error{error}}
 
 
 matchtags{tags1, tags2} =
@@ -276,7 +313,8 @@ class TestMask:
          #test{} ->
             async! dotest{} =
                t = Test{@gen, null}
-               #testResult{path, t, await t.execute{}}
+               {results} = await t.execute{}
+               #testResult{path, t, results}
             RaceGen with {dotest{}}
 
          {ord in {.par, .seq}, x} ->
