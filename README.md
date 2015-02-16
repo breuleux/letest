@@ -85,8 +85,8 @@ blacklist). For instance:
           : hello{"alice"} == "hello alice"
           : hello{"bob"} == "hello bob"
           "#delayed":
-             setup: await wait{1000}
-             : hello{"clara"} == "hello clara"
+             await wait{1000}
+             hello{"clara"} == "hello clara"
           : hello{"dog"} == "hello dog"
        "calculating #calc":
           1 + 2 == 3
@@ -94,4 +94,7 @@ blacklist). For instance:
     ;; This selects tests with the tag "hello" but not the tag "delayed"
     ;; Three tests match: hello alice, hello bob and hello dog
     formatTests{selections.select{{"hello"}, {"delayed"}}}
+
+Tests are automatically exported into `exports.lestests`.
+
 

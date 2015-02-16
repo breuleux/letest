@@ -210,22 +210,25 @@ tests{ctx, info, form, #data{lbl, _body}} =
       body.push{`[^letest].test_group{^gene, ^teardown}`}
       {`async{{} -> ^body}`, `#suite{^descrs}`}
 
-   {v, description, body} = match lbl:
+   {v, name, description, body} = match lbl:
       v and #symbol{name} ->
-         {v, #value{"#" + name}, _body}
+         {v, name, #value{"#" + name}, _body}
       #send{v and #symbol{name}, `{^ #value{lbl}}` or #value{lbl}} ->
-         {v, #value{String{lbl} + " #" + name}, _body}
+         {v, name, #value{String{lbl} + " #" + name}, _body}
 
    {gene, trees} = processBody{body, .par}
    {d, t} = parseDescription{description}
 
-   pr = info.mark{`print`}
    ```
    ^v = [
       macro [^pr]{arg}: `this.log{^arg}`
-      [^letest].TestSuite{#label{^d, ^t, ^trees}, ^gene}
+      exports.lestests or= {=}
+      t = [^letest].TestSuite{#label{^d, ^t, ^trees}, ^gene}
+      get exports.lestests[^=name] = t
    ]
-   ```
+   ``` where
+      pr = info.mark{`print`}
+
 
 
 
