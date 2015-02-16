@@ -115,6 +115,18 @@ splitSetup{clone! stmts} =
          `^x => ^y` ->
             test or= s
             parts.push{#label{x, y}}
+         `^[x and [#value{_} or #void{}]]: ^y` ->
+            test or= s
+            parts.push{#label{x, y}}
+         `^[#symbol{kind}] ^x: ^y` or `^[#symbol{kind}]: ^y` and x is #void{}
+               \ when kind in {.test, .seq, .par} ->
+            test or= s
+            lbl = #label{x, y}
+            parts.push with
+               match kind:
+                  .test -> lbl
+                  .seq  -> #seq{lbl}
+                  .par  -> #par{lbl}
          else ->
             stmt or= s
             parts.push{s}
@@ -175,18 +187,25 @@ tests{ctx, info, form, #data{lbl, _body}} =
          #teardown{b} ->
             teardown = `async{{} -> ^[#multi{*b}]}`
 
-         #label{l, body} ->
-            {parseDescription! {descr, tags}, ord} = match l:
-               `seq ^descr` -> {descr, .seq}
-               `seq`        -> {#value{index += 1}, .seq}
-               `par ^descr` -> {descr, .par}
-               `par`        -> {#value{index += 1}, .par}
-               #void{}      -> {#value{index += 1}, defaultOrd}
-               descr        -> {descr, defaultOrd}
-
+         {ord in {.seq, .par}, #label{l, body}}
+               \ or #label{l, body} and ord is defaultOrd ->
+            parseDescription! {descr, tags} = l
             {g, s} = processBody{body, ord}
             gene.push with g
             descrs.push with `#label{^descr, ^tags, {^=ord, ^s}}`
+
+         ;; #label{l, body} ->
+         ;;    {parseDescription! {descr, tags}, ord} = match l:
+         ;;       `seq ^descr` -> {descr, .seq}
+         ;;       `seq`        -> {#value{index += 1}, .seq}
+         ;;       `par ^descr` -> {descr, .par}
+         ;;       `par`        -> {#value{index += 1}, .par}
+         ;;       #void{}      -> {#value{index += 1}, defaultOrd}
+         ;;       descr        -> {descr, defaultOrd}
+
+         ;;    {g, s} = processBody{body, ord}
+         ;;    gene.push with g
+         ;;    descrs.push with `#label{^descr, ^tags, {^=ord, ^s}}`
 
       body.push{`[^letest].test_group{^gene, ^teardown}`}
       {`async{{} -> ^body}`, `#suite{^descrs}`}
@@ -200,7 +219,13 @@ tests{ctx, info, form, #data{lbl, _body}} =
    {gene, trees} = processBody{body, .par}
    {d, t} = parseDescription{description}
 
-   `[^v = [^letest].TestSuite{#label{^d, ^t, ^trees}, ^gene}]`
+   pr = info.mark{`print`}
+   ```
+   ^v = [
+      macro [^pr]{arg}: `this.log{^arg}`
+      [^letest].TestSuite{#label{^d, ^t, ^trees}, ^gene}
+   ]
+   ```
 
 
 
@@ -210,12 +235,12 @@ test_group{rawtests, teardown} =
       rawtests each test ->
          f where async! f{} =
             try:
-               await test{}
+               await test.call{this}
             finally:
                n -= 1
                if n == 0:
                   try:
-                     await teardown{}
+                     await teardown.call{this}
                   catch e:
                      print "ERROR IN TEARDOWN"
                      console.trace{e}
@@ -269,25 +294,25 @@ class TestSuite:
 
 class Test:
    constructor{@test, @source} =
-      pass
-   accum{match} =
-      === true ->
-         {#success{}}
-      === false ->
-         {#failure{}}
-      #results{*[chain res]} ->
-         @map with {r} -> @accum{r}
-         @reduce with [++]
-      res and [#success or #failure or #error] ->
-         {res}
-      other ->
-         #error{E.tests.protocol{msg, other}} where
-            msg = "Tests must return true, false, #success{...} or #failure{...}"
+      @__log = {}
+   log{x} =
+      @__log.push{x}
    async! execute{} =
-      try:
-         @accum{await @test{}}
-      catch error:
-         {#error{error}}
+      wrap{match} =
+         === true ->
+            #success{}
+         === false ->
+            #failure{}
+         res and [#success or #failure or #error] ->
+            res
+         other ->
+            #error{E.tests.protocol{msg, other}} where
+               msg = "Tests must return true, false, #success{...} or #failure{...}"
+      wrap{x} where x =
+         try:
+            await @test.call{@}
+         catch error:
+            #error{error}
 
 
 matchtags{tags1, tags2} =
@@ -313,7 +338,7 @@ class TestMask:
          #test{} ->
             async! dotest{} =
                t = Test{@gen, null}
-               {results} = await t.execute{}
+               results = await t.execute{}
                #testResult{path, t, results}
             RaceGen with {dotest{}}
 
@@ -383,6 +408,7 @@ async! formatTests{tsts} =
                   tick{}
                   var report = "FAILURE: " + fmtp{path} + "\n"
                   report += "SOURCE: " + test.source + "\n"
+                  report += String{test.__log} + "\n"
                   error_reports.push with report
                #error{error} ->
                   errors += 1
@@ -390,6 +416,7 @@ async! formatTests{tsts} =
                   var report = "ERROR: " + fmtp{path} + "\n"
                   report += "SOURCE: " + test.source + "\n"
                   report += String{error} + "\n"
+                  report += String{test.__log} + "\n"
                   error_reports.push with report
          #error{path, error} ->
             ;; errors += count

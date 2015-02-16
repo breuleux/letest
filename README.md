@@ -14,21 +14,30 @@ Simple example:
        letest -> formatTests
 
     tests misc["Division by Zero"]:
-       "when dividing a number by zero" =>
-          "we get infinity" =>
+       "when dividing a number by zero":
+          "we get infinity":
              42 / 0 == Infinity
-       "but when dividing zero by zero #zerobyzero" =>
-          do:
+       "but when dividing zero by zero #zerobyzero":
+          setup:
              n = 0 / 0
-          "we get a value which" =>
-             "is not a number" =>
+          "we get a value which":
+             "is not a number":
                 String{n} == "NaN"
-             "is not equal to itself" =>
+             "is not equal to itself":
                 n != n
 
     formatTests{misc}
 
     formatTests{misc.select{{"zerobyzero"}}}
+
+A test can have the following forms:
+
+    "description": test
+    test "description": test   ;; same as above
+    seq "description": test    ;; tests executed sequentially
+    par "description": test    ;; tests executed asynchronously
+    : test                     ;; unnamed test
+
 
 All tests are executed asynchronously and their results are collated
 in the order that they finish. `do` blocks are executed before the
@@ -49,16 +58,16 @@ executed while the first is waiting.
 
     wait = promisify{{d, f} -> setTimeout{f, d}}
     tests ordered:
-       seq "shift" =>
-          do:
+       seq "shift":
+          setup:
              x = {1, 2, 3, 4, 5}
-          =>
+          test:
              await wait{1000}
              x.shift{} == 1
-          => x.shift{} == 2
-          => x.shift{} == 3
-          => x.shift{} == 4
-          => x.shift{} == 5
+          : x.shift{} == 2
+          : x.shift{} == 3
+          : x.shift{} == 4
+          : x.shift{} == 5
 
 Test descriptions (left of the fat `=>` arrow) can contain
 hashtags. The `select` method on a test suite can be used to only run
@@ -68,13 +77,13 @@ match any of a second set of hashtags (the blacklist). For instance:
     hello{name} = "hello " + name
     tests selections:
        "helloing #hello" =>
-          1 => hello{"alice"} == "hello alice"
-          2 => hello{"bob"} == "hello bob"
-          "3 #delayed" =>
-             do: await wait{1000}
+          : hello{"alice"} == "hello alice"
+          : hello{"bob"} == "hello bob"
+          "#delayed":
+             setup: await wait{1000}
              hello{"clara"} == "hello clara"
-          4 => hello{"dog"} == "hello dog"
-       "calculating #calc" =>
+          : hello{"dog"} == "hello dog"
+       "calculating #calc":
           1 + 2 == 3
 
     ;; This selects tests with the tag "hello" but not the tag "delayed"
