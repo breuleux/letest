@@ -6,7 +6,7 @@ provide:
    Test
    TestSuite
    formatTests
-   test_group
+   TestGroup
 
 
 global.___letest_global = exports
@@ -141,7 +141,7 @@ splitSetup{clone! stmts} =
    {test != false, parts}
 
 
-tests{ctx, info, form, #data{lbl, _body}} =
+tests{#data{lbl, _body}} =
 
 
    letest = #variable{"___letest_global"}
@@ -185,7 +185,7 @@ tests{ctx, info, form, #data{lbl, _body}} =
 
       tests each match test ->
          #teardown{b} ->
-            teardown = `async{{} -> ^[#multi{*b}]}`
+            teardown = `async{{} -> [try: [^[#multi{*b}], #ignore{}], catch e: #error{e}]}`
 
          {ord in {.seq, .par}, #label{l, body}}
                \ or #label{l, body} and ord is defaultOrd ->
@@ -207,7 +207,7 @@ tests{ctx, info, form, #data{lbl, _body}} =
          ;;    gene.push with g
          ;;    descrs.push with `#label{^descr, ^tags, {^=ord, ^s}}`
 
-      body.push{`[^letest].test_group{^gene, ^teardown}`}
+      body.push{`[^letest].TestGroup{^gene, ^teardown}`}
       {`async{{} -> ^body}`, `#suite{^descrs}`}
 
    {v, name, description, body} = match lbl:
@@ -227,32 +227,32 @@ tests{ctx, info, form, #data{lbl, _body}} =
       get exports.lestests[^=name] = t
    ]
    ``` where
-      pr = info.mark{`print`}
+      pr = this.mark{`print`}
 
-
-
-
-test_group{rawtests, teardown} =
-   var n = rawtests.length
-   if teardown:
-      rawtests each test ->
-         f where async! f{} =
-            try:
-               await test.call{this}
-            finally:
-               n -= 1
-               if n == 0:
-                  try:
-                     await teardown.call{this}
-                  catch e:
-                     print "ERROR IN TEARDOWN"
-                     console.trace{e}
-   else:
-      rawtests
 
 
 class TestGroup:
-   constructor{@rawtests, @teardown} =
+   constructor{@tests, @teardown} =
+      pass
+
+
+;; test_group{rawtests, teardown} =
+;;    var n = rawtests.length
+;;    if teardown:
+;;       rawtests each test ->
+;;          f where async! f{} =
+;;             try:
+;;                await test.call{this}
+;;             finally:
+;;                n -= 1
+;;                if n == 0:
+;;                   try:
+;;                      await teardown.call{this}
+;;                   catch e:
+;;                      print "ERROR IN TEARDOWN"
+;;                      console.trace{e}
+;;    else:
+;;       rawtests
 
 
 class TestSuite:
@@ -360,8 +360,9 @@ class TestMask:
          #suite{sub} ->
             var pos = 0
             var gens = {}
+            var teardown = null
             try:
-               let tests = await @gen{}
+               {tests => let tests, => teardown} = await @gen{}
                tests each test ->
                   submask = if{@mask === true, @mask, @mask[pos]}
                   if submask:
@@ -371,9 +372,14 @@ class TestMask:
                   pos += 1
             catch error:
                gens.push with {} -> #error{path, error}
-            match ord:
-               .par -> RaceGen{gens each g -> g{}}
-               .seq -> SeqGen{gens}
+            tx =
+               match ord:
+                  .par -> {} -> RaceGen{gens each g -> g{}}
+                  .seq -> {} -> SeqGen{gens}
+            if teardown:
+               SeqGen{{tx, {} -> teardown{}}}
+            else:
+               tx{}
 
 
 async! formatTests{tsts} =
@@ -421,7 +427,7 @@ async! formatTests{tsts} =
                   report += String{error} + "\n"
                   report += String{test.__log} + "\n"
                   error_reports.push with report
-         #error{path, error} ->
+         #error{path, error} or #error{error} and path is {"unknown"} ->
             ;; errors += count
             errors += 1
             tick{}
@@ -429,6 +435,10 @@ async! formatTests{tsts} =
             report += String{error} + "\n"
             ;; report += count + " tests could not be run because of this error." + "\n"
             error_reports.push with report
+         #ignore{} ->
+            pass
+         other ->
+            console.log{"Unknown test result:", other}
 
       curr = await tg.next{}
 
