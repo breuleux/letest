@@ -165,7 +165,15 @@ tests{#data{lbl, _body}} =
          {== true, tests} ->
             processSuite{tests, ord}
          {== false, stmts} ->
-            gener = `async{{} -> ^[#multi{*stmts}]}`
+            loc = body.location or {source = {url = null}, start = -1, end = -1}
+            gener = ```
+            [^letest].Test{f, #location{url, s, e}} where
+               url = ^=loc.source.url
+               s = ^=loc.start
+               e = ^=loc.end
+               async! f{} =
+                  ^[#multi{*stmts}]
+            ```
             descr = `#test{}`
             {gener, descr}
 
@@ -340,7 +348,8 @@ class TestMask:
 
          #test{} ->
             async! dotest{} =
-               t = Test{@gen, null}
+               ;; t = Test{@gen, null}
+               t = @gen
                results = await t.execute{}
                #testResult{path, t, results}
             RaceGen with {dotest{}}
@@ -351,7 +360,8 @@ class TestMask:
 
          #label{d, t, x} ->
             if Number? path[path.length - 1]:
-               path[path.length - 1] = d
+               if d != "":
+                  path[path.length - 1] = d
             else:
                path ++= {d}
             m = TestMask{x, @gen, @mask, @count}
@@ -367,7 +377,7 @@ class TestMask:
                   submask = if{@mask === true, @mask, @mask[pos]}
                   if submask:
                      m = TestMask{sub[pos], test, submask}
-                     newpath = if{sub.length == 1, path, path ++ {pos}}
+                     newpath = if{sub.length == 1, path, path ++ {pos + 1}}
                      gens.push with {} -> m.generator{newpath, ord}
                   pos += 1
             catch error:
