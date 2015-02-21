@@ -1,4 +1,10 @@
 
+require:
+   "./pp" -> pr
+   opg ->
+      Location, Source
+   fs
+
 
 provide:
    tests
@@ -10,6 +16,36 @@ provide:
 
 
 global.___letest_global = exports
+
+
+macro "'"{#value{s}}:
+
+   require:
+      quaint
+
+   q = quaint.create{evaluator} where
+      evaluator = {
+         eval{src} =
+            @mark{@go{src.makeSource{}, .source, .parse}}
+         setenv{name, value} =
+            pass
+      }
+
+   transform{match node} =
+      String? or Number? ->
+         #value{node}
+      ENode? {=> tags, => props, => children} ->
+         `ENode{{^*wtags}, {=}, {^*wchildren}}` where
+            wtags = tags each tag -> #value{tag}
+            wchildren = children each child -> transform{child}
+      else ->
+         node
+
+   try:
+      transform{q.run{s}}
+   catch err:
+      console.error{err.stack}
+
 
 
 class RaceGen:
@@ -230,12 +266,14 @@ tests{#data{lbl, _body}} =
    ```
    ^v = [
       macro [^pr]{arg}: `this.log{^arg}`
+      macro [^bob]{arg}: `this.log{^arg}`
       exports.lestests or= {=}
       t = [^letest].TestSuite{#label{^d, ^t, ^trees}, ^gene}
       get exports.lestests[^=name] = t
    ]
    ``` where
       pr = this.mark{`print`}
+      bob = this.mark{`BOB`}
 
 
 
@@ -394,6 +432,12 @@ class TestMask:
 
 async! formatTests{tsts} =
 
+   srccache = {=}
+   getSource{url} =
+      srccache[url] or
+         srccache[url] = Source{fs.readFileSync{url, .utf8}, url, 0}
+         srccache[url]
+
    error_reports = {}
 
    var successes = 0
@@ -406,10 +450,17 @@ async! formatTests{tsts} =
       stream.cursorTo{0}
       stream.write{"Successes: " + successes + ", Failures: " + failures + ", Errors: " + errors}
 
+   ;; fmtp{path} =
+   ;;    [p.join{" => "}] where p = path each
+   ;;       Number? n -> "Test #" + n
+   ;;       s -> s
+
    fmtp{path} =
-      [p.join{" => "}] where p = path each
-         Number? n -> "Test #" + n
-         s -> s
+      path each
+         Number? n ->
+            .testlabel % "Test #" + n
+         s ->
+            .testlabel % s
 
    tg = await tsts.generator{}
    var curr = await tg.next{}
@@ -425,17 +476,52 @@ async! formatTests{tsts} =
                #failure ->
                   failures += 1
                   tick{}
-                  var report = "FAILURE: " + fmtp{path} + "\n"
-                  report += "SOURCE: " + test.source + "\n"
-                  report += String{test.__log} + "\n"
+                  loc = Location{getSource{url}, start, end} where
+                     #location{url, start, end} = test.source
+                  report =
+                     div.failure %
+                        '=== [.orange .. FAILURE]'
+                        fmtp{path}
+                        br %
+                        div.source %
+                           loc.highlight{"hl1", 1}
+                        match test.__log:
+                           {} -> ""
+                           log -> {
+                              '==== LOG'
+                              log each entry ->
+                                 div % repr{entry}
+                           }
                   error_reports.push with report
                #error{error} ->
                   errors += 1
                   tick{}
-                  var report = "ERROR: " + fmtp{path} + "\n"
-                  report += "SOURCE: " + test.source + "\n"
-                  report += String{error} + "\n"
-                  report += String{test.__log} + "\n"
+                  loc = Location{getSource{url}, start, end} where
+                     #location{url, start, end} = test.source
+                  report =
+                     div.err %
+                        '=== [.red .. ERROR]'
+                        fmtp{path}
+                        br %
+                        div.source %
+                           loc.highlight{"hl1"}
+                        '==== TRACEBACK'
+                        div %
+                           error.stack
+                        match test.__log:
+                           {} -> ""
+                           log -> {
+                              '==== LOG'
+                              log each entry ->
+                                 div % repr{entry}
+                           }
+
+
+                  ;; var report = "ERROR: " + fmtp{path} + "\n"
+                  ;; report += "SOURCE: " + test.source + "\n"
+                  ;; report += String{error} + "\n"
+                  ;; report += String{test.__log} + "\n"
+
                   error_reports.push with report
          #error{path, error} or #error{error} and path is {"unknown"} ->
             ;; errors += count
@@ -454,10 +540,33 @@ async! formatTests{tsts} =
 
    console.log{}
 
+   pr with
+      style % raw % """
+      .failure {
+         margin-left: 5px;
+         padding-left: 10px;
+         border-left: 5px solid orange;
+      }
+      .err {
+         margin-left: 5px;
+         padding-left: 10px;
+         border-left: 5px solid red;
+      }
+      .red { color: red; }
+      .orange { color: orange; }
+      .testlabel {
+         padding: 3px;
+         margin-left: 5px;
+         margin-right: 5px;
+         border: 1px solid #080;
+         background-color: #050;
+         color: #fff;
+      }
+      """
    error_reports each report ->
-      console.log with "\n==========="
-      console.log with report
+      pr{report}
+      ;; console.log with report
 
-   console.log with "Done."
+   print "Done."
 
    pass
